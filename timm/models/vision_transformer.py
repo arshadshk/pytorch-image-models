@@ -170,7 +170,7 @@ default_cfgs = {
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0., attn_mask=False, eta=None ):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
@@ -181,7 +181,16 @@ class Attention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
+        self.attn_mask = attn_mask
+        self.eta = eta
+    
     def forward(self, x):
+        if not self.attn_mask:
+            return self.attention( x )
+        else:
+            return self.masked_attention( x )
+
+    def attention(self, x):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
@@ -195,14 +204,48 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+    def masked_attention(self, x):
+        B, N, C = x.shape
+        kv_ind = self.get_context_tokens(x)
+        N2 = kv_ind.shape[1]
+
+        # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        qkv = self.qkv(x).reshape(B, N, 3, -1).permute(2, 0, 1, 3)
+        q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
+
+        k = k[torch.arange(B).unsqueeze(1), kv_ind] # take only the context tokens
+        v = v[torch.arange(B).unsqueeze(1), kv_ind]
+
+        q = q.reshape( B, N, self.num_heads, C // self.num_heads).permute(0,2,1,3)
+        k = k.reshape( B, N2, self.num_heads, C // self.num_heads).permute(0,2,1,3)
+        v = v.reshape( B, N2, self.num_heads, C // self.num_heads).permute(0,2,1,3)
+
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+    
+    def get_context_tokens( self, x ):
+        B, N, C = x.shape
+        M = int( N * self.eta)#total context tokens# TODO take eta from forward
+        rand_ind = torch.randn(B, N).argsort(dim=1)# this is to get random numbers non repeated, from 0 to N
+        kv_ind = rand_ind[torch.arange(B).unsqueeze(1), rand_ind[:, :M]]# get the first M examples from examples
+        return kv_ind
 
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, attn_mask=False, eta=None ):
         super().__init__()
+        self.attn_mask = attn_mask
+        self.eta = eta
         self.norm1 = norm_layer(dim)
-        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
+        self.attn = Attention(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop, attn_mask=self.attn_mask, eta=self.eta)
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -228,7 +271,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, representation_size=None, distilled=False,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init=''):
+                 act_layer=None, weight_init='', attn_mask=False, eta=None):
         """
         Args:
             img_size (int, tuple): input image size
@@ -256,6 +299,10 @@ class VisionTransformer(nn.Module):
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         act_layer = act_layer or nn.GELU
 
+        # MP3 attention masking
+        self.attn_mask = attn_mask
+        self.eta = eta
+
         self.patch_embed = embed_layer(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
@@ -269,7 +316,7 @@ class VisionTransformer(nn.Module):
         self.blocks = nn.Sequential(*[
             Block(
                 dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer)
+                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attn_mask=self.attn_mask, eta=self.eta)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 

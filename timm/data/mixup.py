@@ -206,7 +206,7 @@ class Mixup:
             x.mul_(lam).add_(x_flipped)
         return lam
 
-    def __call__(self, x, target):
+    def __call__(self, x, target, device="cuda"):
         assert len(x) % 2 == 0, 'Batch size should be even when using this'
         if self.mode == 'elem':
             lam = self._mix_elem(x)
@@ -214,7 +214,7 @@ class Mixup:
             lam = self._mix_pair(x)
         else:
             lam = self._mix_batch(x)
-        target = mixup_target(target, self.num_classes, lam, self.label_smoothing)
+        target = mixup_target(target, self.num_classes, lam, self.label_smoothing, device)
         return x, target
 
 
