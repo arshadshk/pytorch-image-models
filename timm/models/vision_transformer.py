@@ -136,6 +136,12 @@ default_cfgs = {
     'deit_small_patch16_224': _cfg(
         url='https://dl.fbaipublicfiles.com/deit/deit_small_patch16_224-cd65a155.pth',
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+
+    # cifar 100, input 32x32
+    'deit_small_patch4_32': _cfg(
+        url='https://dl.fbaipublicfiles.com/deit/deit_small_patch16_224-cd65a155.pth',
+        mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+
     'deit_base_patch16_224': _cfg(
         url='https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth',
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
@@ -271,7 +277,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, representation_size=None, distilled=False,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init='', attn_mask=False, eta=None):
+                 act_layer=None, weight_init='', attn_mask=False, eta=None, patch_stride=None):
         """
         Args:
             img_size (int, tuple): input image size
@@ -304,7 +310,7 @@ class VisionTransformer(nn.Module):
         self.eta = eta
 
         self.patch_embed = embed_layer(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, patch_stride=patch_stride)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -331,6 +337,7 @@ class VisionTransformer(nn.Module):
             self.pre_logits = nn.Identity()
 
         # Classifier head(s)
+        num_classes = num_patches if self.attn_mask is not None else  num_classes
         self.head = nn.Linear(self.num_features, num_classes) if num_classes > 0 else nn.Identity()
         self.head_dist = None
         if distilled:
@@ -382,11 +389,15 @@ class VisionTransformer(nn.Module):
             x = torch.cat((cls_token, x), dim=1)
         else:
             x = torch.cat((cls_token, self.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
-        x = self.pos_drop(x + self.pos_embed)
+        if not self.attn_mask:
+            x = self.pos_drop(x + self.pos_embed)
         x = self.blocks(x)
         x = self.norm(x)
         if self.dist_token is None:
-            return self.pre_logits(x[:, 0])
+            if not self.attn_mask:
+                return self.pre_logits(x[:, 0])
+            else:
+                return x
         else:
             return x[:, 0], x[:, 1]
 
@@ -829,6 +840,16 @@ def deit_small_patch16_224(pretrained=False, **kwargs):
     """
     model_kwargs = dict(patch_size=16, embed_dim=384, depth=12, num_heads=6, **kwargs)
     model = _create_vision_transformer('deit_small_patch16_224', pretrained=pretrained, **model_kwargs)
+    return model
+
+
+@register_model
+def deit_small_patch4_32(pretrained=False, **kwargs):
+    """ DeiT-small model @ 224x224 from paper (https://arxiv.org/abs/2012.12877).
+    ImageNet-1k weights from https://github.com/facebookresearch/deit.
+    """
+    model_kwargs = dict(patch_size=4, embed_dim=384, depth=12, num_heads=6, **kwargs)
+    model = _create_vision_transformer('deit_small_patch4_32', pretrained=pretrained, **model_kwargs)
     return model
 
 

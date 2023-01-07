@@ -15,7 +15,7 @@ from .helpers import to_2tuple
 class PatchEmbed(nn.Module):
     """ 2D Image to Patch Embedding
     """
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, norm_layer=None, flatten=True):
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, norm_layer=None, flatten=True, patch_stride=None):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -24,8 +24,9 @@ class PatchEmbed(nn.Module):
         self.grid_size = (img_size[0] // patch_size[0], img_size[1] // patch_size[1])
         self.num_patches = self.grid_size[0] * self.grid_size[1]
         self.flatten = flatten
+        self.patch_stride = self.patch_size if patch_stride is None else patch_stride
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=self.patch_stride)
         self.norm = norm_layer(embed_dim) if norm_layer else nn.Identity()
 
     def forward(self, x):
