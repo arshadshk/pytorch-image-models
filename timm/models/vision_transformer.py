@@ -238,7 +238,7 @@ class Attention(nn.Module):
     
     def get_context_tokens( self, x ):
         B, N, C = x.shape
-        M = int( N * self.eta)#total context tokens# TODO take eta from forward
+        M = int( N * (1-self.eta))#total context tokens# TODO take eta from forward
         rand_ind = torch.randn(B, N).argsort(dim=1)# this is to get random numbers non repeated, from 0 to N
         kv_ind = rand_ind[torch.arange(B).unsqueeze(1), rand_ind[:, :M]]# get the first M examples from examples
         return kv_ind
